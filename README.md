@@ -365,3 +365,35 @@ Zend\Log\Logger
 ```
 
 ## 4.5. Debug
+
+### Nhập payload
+Khi thực hiện khai thác và thêm stream wrapper `phar://` vào trước đường dẫn của ảnh. Biến `$source`đã nhận giá trị là đường dẫn của **phar** file. Khi filesystem function `file_exists()` được gọi, nó đã trigger để payload trong metadata của phar file tự dộng `unserialize` và thực thi đoạn code đó.
+<p align="center">
+  <img src="./img/debug-file_exists.png">
+    <p align="center"><em>Nơi trigger</em></p>
+</p>
+
+### Zend\Log\Logger::__destruct()
+Như đã đề cập bên trên sau khi `Logger` bị hủy thì hàm `__destruct()` của class sẽ tự động được gọi tới.
+<p align="center">
+  <img src="./img/debug-logger.png">
+    <p align="center"><em>Khi gọi tới hàm Logger::__destruct()</em></p>
+</p>
+
+- Trong hàm `__destruct()` đã gọi tới phương thức `shutdown()` của đối tượng `$writer`.
+- `$writer` là một instance của class `Zend\Log\Writer\Mail` như đã thấy trong chain và phần debug.
+
+### Zend\Log\Writer\Mail::shutdown()
+- Hàm `shutdown()` được định nghĩa tại `Zend\Log\Writer\Mail`
+- Khi chạy hàm đầu tiên sẽ kiểm tra `$this->__eventsToMail` có phải mảng rỗng hay không, nếu nó rỗng thì hàm `shutdown()` sẽ thoát và không làm gì cả.
+- Vì vậy ở chain đã set `$this->eventsToMail = array(0)` để mảng không rỗng.
+<p align="center">
+  <img src="./img/debug-shutdown-eventToMail.png">
+    <p align="center"><em>$this->_eventsToMail</em></p>
+</p>
+
+Tiếp đến là set `$this->subjectPrependText = ""` để thỏa mãn điều kiện `if ($this->subjectPrependText !== null)` 
+<p align="center">
+  <img src="./img/debug-shutdown-subject.png">
+    <p align="center"><em>$this->subjectPrependText !== null</em></p>
+</p>
