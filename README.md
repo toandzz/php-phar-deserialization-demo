@@ -397,3 +397,103 @@ Tiếp đến là set `$this->subjectPrependText = ""` để thỏa mãn điều
   <img src="./img/debug-shutdown-subject.png">
     <p align="center"><em>$this->subjectPrependText !== null</em></p>
 </p>
+
+Khi đã thỏa mãn điều kiện trên hàm `getFormattedNumEntriesPerPriority()` trong class `Zend\Log\Writer\Mail` được gọi tới
+<p align="center">
+  <img src="./img/debug-priority.png">
+    <p align="center"><em>$this->numEntriesPerPriority</em></p>
+</p>
+
+- Tại đây khởi tạo mảng `$this->numEntriesPerPriority` với 1 phần tử `0 => new \Zend\Tag\Cloud($function, $param)`
+- Việc set giá trị như vậy tiếp theo chương trình sẽ chạy vào class `Zend\Tag\Cloud`
+
+### Zend\Tag\Cloud
+Với chain ta đã chọn tại `Zend\Tag\Cloud` lần lượt set giá trị của `$this->tags = array("")` và `$this->tagDecorator = new \Zend\Tag\Cloud\Decorator\HtmlCloud($function, $param)`. Khi đối tượng được khởi tạo hàm `__toString()` được gọi để ép buộc đối tượng thành một chuỗi và trong hàm này tiếp tục gọi tới hàm `render()` trong cùng class để trả về kết quả.
+<p align="center">
+  <img src="./img/debug-cloud-toString.png">
+    <p align="center"><em>Zend\Tag\Cloud::__toString()</em></p>
+</p>
+
+- Đi vào hàm `render()` chương trình gọi tới hàm `getItemList()` để lấy các tags. 
+<p align="center">
+  <img src="./img/debug-cloud-render-getitem.png">
+    <p align="center"><em>Zend\Tag\Cloud::render()</em></p>
+</p>
+
+- Việc đã khởi tạo với `$this->tags = array("")` thì sau khi `getItemList()` được gọi thì số phần tử của mảng `$tags > 0` và không chạy vào điều kiện `if (count($tags) === 0)`. Nếu chạy vào điều kiện đó thì không render gì cả và trả về chuỗi rỗng.
+- Tiếp tục chương trình gọi tới hàm `getTagDecorator()->render()` để lấy decorator cho các tags trong tag cloud hoặc hoặc thiết lập decorator mặc định nếu chưa được thiết lập trước đó. Đoạn code hàm dưới đây để thực hiện việc đó.
+```php
+public function getTagDecorator()
+    {
+        if (null === $this->tagDecorator) {
+            $this->setTagDecorator('htmlTag');
+        }
+        return $this->tagDecorator;
+    }
+```
+- Với hàm trên thì kết quả trả về đã được xác định bằng việc khởi tạo `$this->tagDecorator = new \Zend\Tag\Cloud\Decorator\HtmlCloud($function, $param)` thì chương trình tiếp tục chạy vào class `Zend\Tag\Cloud\Decorator\HtmlCloud`
+
+### Zend\Tag\Cloud\Decorator\HtmlCloud::render()
+<p align="center">
+  <img src="./img/debug-htmlcloud-render.png">
+    <p align="center"><em>Zend\Tag\Cloud\Decorator\HtmlCloud::render()</em></p>
+</p>
+
+- Hàm `render()` được gọi với đầu vào là `$tags`, đầu tiên `$tags` sẽ được kiểm tra có phải là kiểu dữ liệu khác mảng hay không. Trong trường hợp này `$tags` là mảng chứa 1 phần tử là `string[0] = ""` và pass qua exception này.
+- `$cloudHTML = ""` cũng dễ hiểu bởi vì `$tags` chỉ có 1 phần tử là chuỗi rỗng và `$this->separator = ""` đã được set trong chain.
+- Sau đó biến `$cloudHTML` được truyền vào hàm `$this->wrapTag()`. Hàm này được định nghĩa trong `Zend\Tag\Cloud\Decorator\AbstractDecorator`. Tại sao ở đây gọi được hàm đó là bởi vì `Zend\Tag\Cloud\Decorator\HtmlCloud` kế thừa `Zend\Tag\Cloud\Decorator\AbstractCloud` và `AbstractCloud` kế thừa class `Zend\Tag\Cloud\Decorator\AbstractDecorator`.
+
+<p align="center">
+  <img src="./img/debug-htmlcloud-wraptag.png">
+    <p align="center"><em>Zend\Tag\Cloud\Decorator\HtmlCloud::wrapTag()</em></p>
+</p>
+
+- Việc set `$this->htmlTags = ["h" => ["a" => "!"]]` là để tránh validate bởi hàm `validateElementName()` và set `$value = "!"`để chạy vào `$escaper->escapeHtmlAttr()` để được escape trong đó đối tượng `$escaper` đã được set là 1 instance của class `Zend\Escaper\Escaper`.
+
+### Zend\Escaper\Escaper::escapeHtmlAttr()
+<p align="center">
+  <img src="./img/debug-escapeHtmlAttr.png">
+    <p align="center"><em>Zend\Escaper\Escaper::escapeHtmlAttr()</em></p>
+</p>
+
+- `$string: "!"` khi được đi qua hàm `toUtf8()` thì đầu ra nó vẫn giữa nguyên như vậy, với điều kiện `if ($string === '' || ctype_digit($string))` không thỏa mãn thì tiếp tục chương trình.
+- Ký tự `"!"` không có mặt trong danh sách hợp lệ (do nó không phải là một chữ cái, số, dấu chấm, dấu gạch dưới hoặc dấu gạch ngang), vì vậy sẽ bị thay thế `preg_replace_callback()` sẽ gọi callback function `($this->htmlAttrMatcher)` để xử lý ký tự `"!"`.
+- Mà 
+```php
+$this->htmlAttrMatcher = array(
+                new \Zend\Filter\FilterChain($function, $param),
+                "filter"
+            );
+```
+nên phương thức `filter()` trong class `Zend\Filter\FilterChain` được gọi tới.
+
+### Zend\Filter\FilterChain::filter()
+<p align="center">
+  <img src="./img/debug-filter.png">
+    <p align="center"><em>Zend\Filter\FilterChain::filter()</em></p>
+</p>
+
+- `$chain` được clone `$this->filters` mà trong chain đang sử dụng `$filter` đã được khai báo là mảng có kích thước cố định `\SplFixedArray(2)` với 2 phần tử.
+```php
+$this->filters[0] = array(
+                new \Zend\Json\Expr($param),
+                "__toString"
+            );
+$this->filters[1] = $function;
+```
+- Trong payload của ta đã set `$param = 'calc.exe'` và `$function = system`. 
+- Khi chương trình vào `foreach` vòng lặp đầu tiên sẽ gọi tới phần tử đầu tiên của `$chain` và sẽ gọi tới **Zend\Json\Expr::__toString()** để chuyển `$param` thành dạng chuỗi.
+
+<p align="center">
+  <img src="./img/debug-expr.png">
+    <p align="center"><em>Zend\Json\Expr::__toString()</em></p>
+</p>
+
+- Giá trị trả về sẽ được gán vào `$valueFiltered = "calc.exe"`.
+- Tiếp đến vòng lặp thứ 2 thì `$filter = system` khi đó `$valueFiltered = call_user_func(system, "calc.exe")`.
+<p align="center">
+  <img src="./img/debug-filter-return.png">
+    <p align="center"><em>call_user_func($filter, $valueFiltered)</em></p>
+</p>
+
+- `return $valueFiltered` câu lệnh `call_user_func(system, "calc.exe")` sẽ được thực thi, ứng dụng **Calculator** trên **Windows** được bật.
