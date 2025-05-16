@@ -1,5 +1,25 @@
 # PHP PHAR DESERIALIZATION DEMO
 
+## Mục lục
+- [1. Tổng quan về lỗ hổng](#1-tổng-quan-về-lỗ-hổng)
+- [2. Một số khái niệm](#2-một-số-khái-niệm)
+  - [2.1. Deserialization](#21-deserialization)
+  - [2.2. Magic method](#22-magic-method)
+  - [2.3. Pop Chain](#23-pop-chain)
+- [3. Chi tiết lỗ hổng](#3-chi-tiết-lỗ-hổng)
+  - [3.1. Phar file trong PHP](#31-phar-file-trong-php)
+  - [3.2. Filesystem function](#32-filesystem-function)
+  - [3.3. phar:// stream wrapper](#33-phar-stream-wrapper)
+- [4. Khai thác](#4-khai-thác)
+  - [4.1. Môi trường xây dựng ứng dụng](#41-môi-trường-xây-dựng-ứng-dụng)
+  - [4.2. Đoạn mã có thể khai thác lỗ hổng](#42-đoạn-mã-có-thể-khai-thác-lỗ-hổng)
+  - [4.3. Quy trình khai thác](#43-quy-trình-khai-thác)
+  - [4.4. Phân tích POP chain đã sử dụng](#44-phân-tích-pop-chain-đã-sử-dụng)
+  - [4.5. Debug](#45-debug)
+- [5. Biện pháp phòng chống lỗ hổng](#5-biện-pháp-phòng-chống-lỗ-hổng)
+  - [5.1. Kiểm tra và làm sạch đầu vào đường đẫn tệp](#51-kiểm-tra-và-làm-sạch-đầu-vào-đường-đẫn-tệp)
+  - [5.2 Sử dụng thư viện an toàn và PHP version mới](#52-sử-dụng-thư-viện-an-toàn-và-php-version-mới)
+  - [5.3. Cấu hình máy chủ](#53-cấu-hình-máy-chủ)
 ## 1. Tổng quan về lỗ hổng
 
 **PHP PHAR Deserialization** là một lỗ hổng bảo mật nguy hiểm xuất hiện khi ứng dụng PHP xử lý file PHAR (PHP Archive) mà không kiểm soát đúng cách quá trình **giải tuần tự (unserialize)** dữ liệu chứa trong **metadata (siêu dữ liệu)** của file.
@@ -131,7 +151,7 @@ Dưới đây là danh sách các filesystem function có thể trigger lỗ h�
 ## 3.3. `phar://` stream wrapper
 Là một **stream wrapper** cho phép chúng ta có thể truy cập vào các file bên trong một file phar thông qua các **filesytstem function** như đã mô tả ở trên. Khi sử dụng `phar://`, PHP sẽ tự động đọc và unserialize phần metadata của file Phar, kích hoạt các magic method mà không cần gọi `unserialize()` trong code.
 
-# 4. Khai thác 
+# 4. Khai thác
 Xây dựng demo 1 app resize ảnh đơn giản có chức năng upload, resize và download ảnh kết hợp với ImageMagick để resize ảnh sử dụng **Zend Framework** chứa đoạn mã có thể trigger lỗ hổng **php phar deserialization**. Sau đó khai thác lỗ hổng này trên app, ta có thể tự build hoặc sử dụng công cụ `phpgcc` để gen ra file phar chứa payload ở metadata. Với demo này đã lấy gadget chain và gen payload trên `phpggc`.
 
 ## 4.1. Môi trường xây dựng ứng dụng
@@ -192,7 +212,7 @@ public function resizeAction()
 ![Resize interface](./img/resize-interface.png)
 Hàm `resizeAction()` bên trên sẽ chạy khi người dùng chọn ảnh, nhập kích thước muốn resize và nhấn **Resize**. Khi đó **filesystem function** `file_exists()` sẽ **tự động unserialize metadata và thực thi đoạn code đó** của `$source` khi mà nó là đường dẫn của 1 file **phar**.
 
-## 4.3. Quy trình khai thác 
+## 4.3. Quy trình khai thác
 Với entry point bên trên tiếp theo cần tìm `POP chain` để khai thác được lỗ hổng này. Sử dụng công cụ `phpgcc` để gen payload, công cụ này có rất nhiều `gadget chain` khai thác các framework được xây dựng bằng **PHP**. Sau khi cài đặt công cụ sử dụng câu lệnh sau để gen ra payload sử dụng khai thác trong lần demo này.
 ```shell
 php phpggc -p phar -o exploit.phar zendframework/rce3 system 'calc.exe'
@@ -497,3 +517,25 @@ $this->filters[1] = $function;
 </p>
 
 - `return $valueFiltered` câu lệnh `call_user_func(system, "calc.exe")` sẽ được thực thi, ứng dụng **Calculator** trên **Windows** được bật.
+
+## 5. Biện pháp phòng chống lỗ hổng
+Lỗ hổng `PHP Phar deserialization` xảy ra khi một file Phar được x lý như một đối tượng PHP mà không được kiểm soát dữ liệu đầu vào, dẫn đến việc thực thi mã thông qua quá trình **deserialization**.
+
+### 5.1. Kiểm tra và làm sạch đầu vào đường đẫn tệp
+- Mọi tệp do người dùng cung cấp dều được xác thực cẩn thận đặc biệt với `phar://`.Trước khi thao tác, nên dùng `parse_url()` hoặc `stripos()` để đảm bảo không có wrapper `phar` trong đường dẫn. Ví dụ:
+```php
+$path = $_GET['file'];
+if (stripos($path, 'phar://') !== false) {
+    // Từ chối hoặc bỏ qua các đường dẫn có phar://
+    die('Invalid file path');
+}
+```
+- Không cho phép người dùng điều khiển trực tiếp tham số của các hàm đọc/ghi tệp PHP (`include`, `require`, `file_get_contents`, `file_exists`, `md5_file`, v.v.)
+- Kiểm soát chặt chẽ các tập tin upload (loại trừ file PHAR, kiểm tra MIME và phần mở rộng thật của file) để tránh kẻ tấn công dùng kỹ thuật **steghide** nhúng một PHAR trong file ảnh.
+### 5.2. Sử dụng thư viện an toàn và PHP version mới
+- Sử dụng các thư viện an toàn, cập nhật thường xuyên khi mà các lỗ hổng được công bố và vá. Một số framework version cũ có thể chứa nhiều gadget chain có thể khai thác được lỗ hổng này.
+- Cập nhật `PHP version` lên phiên bản `<= 8.0`. Bởi từ version này trở đi đã không tự động **unsrilize metadata** của PHAR. Cụ thể, các hàm như `file_exists`, `fopen`… sẽ không chạy unserialize trừ khi gọi trực tiếp `$phar->getMetadata()`.
+### 5.3. Cấu hình máy chủ
+- Cấu hình `phar.readonly = On` để chặn tạo/ghi PHAR trên server. Nấu bắt buộc phải sử dụng file PHAR thì cần cấu hình `phar.require_hash = On` bắt buộc PHAR có chữ ký số hợp lệ.
+- Giới hạn môi trường thực thi. Sử dụng `open_basedir` để giới hạn thư mục PHP được phép thao tác giúp ngăn PHAR ngoài phạm vi an toàn. Tắt `allow_url_fopen` và `allow_url_include` (mặc định PHP không cho `phar://` qua URL) để giảm nguy cơ dùng URL stream.
+
